@@ -33,7 +33,8 @@ export async function POST(request: NextRequest) {
 
   try {
     const db = getDatabase()
-    const body = await request.json()
+    const body = await request.json().catch(() => null)
+    if (!body) return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
     const tenantId = Number(body.tenant_id)
     const dryRun = body.dry_run !== false
     const jobType = String(body.job_type || 'bootstrap')

@@ -123,7 +123,8 @@ export async function PUT(request: NextRequest) {
 
   const db = getDatabase()
   const workspaceId = auth.user.workspace_id ?? 1
-  const body = await request.json()
+  const body = await request.json().catch(() => null)
+  if (!body) return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   const { id, ...updates } = body
 
   if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 })
@@ -169,7 +170,8 @@ export async function DELETE(request: NextRequest) {
 
   const db = getDatabase()
   const workspaceId = auth.user.workspace_id ?? 1
-  const body = await request.json()
+  const body = await request.json().catch(() => null)
+  if (!body) return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   const { id } = body
 
   if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 })

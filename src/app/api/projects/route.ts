@@ -83,7 +83,8 @@ export async function POST(request: NextRequest) {
       ipAddress: forwardedFor,
       userAgent: request.headers.get('user-agent'),
     })
-    const body = await request.json()
+    const body = await request.json().catch(() => null)
+    if (!body) return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
 
     const name = String(body?.name || '').trim()
     const description = typeof body?.description === 'string' ? body.description.trim() : ''

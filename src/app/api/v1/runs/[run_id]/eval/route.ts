@@ -15,7 +15,8 @@ export async function PUT(
 
   try {
     const { run_id } = await params
-    const body = await request.json()
+    const body = await request.json().catch(() => null)
+    if (!body) return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
     const workspaceId = auth.user.workspace_id ?? 1
 
     if (body.pass === undefined || body.score === undefined) {

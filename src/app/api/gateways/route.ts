@@ -78,7 +78,8 @@ export async function POST(request: NextRequest) {
 
   const db = getDatabase()
   ensureTable(db)
-  const body = await request.json()
+  const body = await request.json().catch(() => null)
+  if (!body) return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
 
   const { name, host, port, token, is_primary, agents } = body
 
@@ -144,7 +145,8 @@ export async function PUT(request: NextRequest) {
 
   const db = getDatabase()
   ensureTable(db)
-  const body = await request.json()
+  const body = await request.json().catch(() => null)
+  if (!body) return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   const { id, ...updates } = body
 
   if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 })
@@ -212,7 +214,8 @@ export async function DELETE(request: NextRequest) {
 
   const db = getDatabase()
   ensureTable(db)
-  const body = await request.json()
+  const body = await request.json().catch(() => null)
+  if (!body) return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   const { id } = body
 
   if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 })

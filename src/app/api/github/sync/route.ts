@@ -50,7 +50,8 @@ export async function POST(request: NextRequest) {
   if ('error' in auth) return NextResponse.json({ error: auth.error }, { status: auth.status })
 
   try {
-    const body = await request.json()
+    const body = await request.json().catch(() => null)
+    if (!body) return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
     const { action, project_id } = body
     const db = getDatabase()
     const workspaceId = auth.user.workspace_id ?? 1

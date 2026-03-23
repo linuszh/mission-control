@@ -265,7 +265,8 @@ export async function POST(request: NextRequest) {
   if ('error' in auth) return NextResponse.json({ error: auth.error }, { status: auth.status })
 
   try {
-    const body = await request.json()
+    const body = await request.json().catch(() => null)
+    if (!body) return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
     const { action, jobName, jobId } = body
 
     if (action === 'toggle') {

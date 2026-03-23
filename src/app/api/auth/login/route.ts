@@ -10,7 +10,9 @@ export async function POST(request: Request) {
     const rateCheck = loginLimiter(request)
     if (rateCheck) return rateCheck
 
-    const { username, password } = await request.json()
+    const body = await request.json().catch(() => null)
+    if (!body) return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+    const { username, password } = body
 
     if (!username || !password) {
       return NextResponse.json({ error: 'Username and password are required' }, { status: 400 })

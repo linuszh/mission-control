@@ -14,7 +14,9 @@ export async function POST(request: NextRequest) {
   try {
     const db = getDatabase()
     const workspaceId = auth.user.workspace_id ?? 1
-    const { delivery_id } = await request.json()
+    const body = await request.json().catch(() => null)
+    if (!body) return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+    const { delivery_id } = body
 
     if (!delivery_id) {
       return NextResponse.json({ error: 'delivery_id is required' }, { status: 400 })

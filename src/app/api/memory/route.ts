@@ -330,7 +330,8 @@ export async function POST(request: NextRequest) {
   if (rateCheck) return rateCheck
 
   try {
-    const body = await request.json()
+    const body = await request.json().catch(() => null)
+    if (!body) return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
     const { action, path, content } = body
 
     if (!path) {
@@ -407,7 +408,8 @@ export async function DELETE(request: NextRequest) {
   if (rateCheck) return rateCheck
 
   try {
-    const body = await request.json()
+    const body = await request.json().catch(() => null)
+    if (!body) return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
     const { action, path } = body
 
     if (!path) {
