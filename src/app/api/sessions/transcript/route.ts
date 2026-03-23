@@ -6,6 +6,7 @@ import { config } from '@/lib/config'
 import { getDatabase } from '@/lib/db'
 import { requireRole } from '@/lib/auth'
 import { logger } from '@/lib/logger'
+import { readFileSafe } from '@/lib/safe-utils'
 
 type MessageContentPart =
   | { type: 'text'; text: string }
@@ -187,10 +188,9 @@ function readClaudeTranscript(sessionId: string, limit: number): TranscriptMessa
   const file = findSessionFile(sessionId)
   if (!file) return []
 
-  let raw = ''
-  try {
-    raw = fs.readFileSync(file, 'utf-8')
-  } catch {
+  const raw = readFileSafe(file, { maxBytes: 10 * 1024 * 1024 })
+  if (!raw) {
+    logger.warn({ file, sessionId }, 'Claude transcript file missing or exceeds 10MB size limit')
     return []
   }
 
