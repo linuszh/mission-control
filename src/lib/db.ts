@@ -589,5 +589,5 @@ if (typeof window === 'undefined' && !isBuildPhase) {
 
 // Cleanup on process exit
 process.on('exit', closeDatabase);
-process.on('SIGINT', closeDatabase);
-process.on('SIGTERM', closeDatabase);
+process.on('SIGINT', () => { closeDatabase(); process.exit(0); });
+process.on('SIGTERM', () => { closeDatabase(); process.exit(0); });
