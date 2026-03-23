@@ -3,6 +3,7 @@ import path from 'node:path'
 import { NextRequest, NextResponse } from 'next/server'
 import Database from 'better-sqlite3'
 import { config } from '@/lib/config'
+import { getDatabase } from '@/lib/db'
 import { requireRole } from '@/lib/auth'
 import { logger } from '@/lib/logger'
 
@@ -80,94 +81,121 @@ function textPart(content: string | null, limit = 8000): MessageContentPart | nu
   return { type: 'text', text: text.slice(0, limit) }
 }
 
-function readClaudeTranscript(sessionId: string, limit: number): TranscriptMessage[] {
+/** Find the JSONL file for a session by direct path lookup or DB slug. */
+function findSessionFile(sessionId: string): string | null {
   const root = path.join(config.claudeHome, 'projects')
-  const files = listRecentFiles(root, '.jsonl', 300)
-  const out: TranscriptMessage[] = []
+  if (!root || !fs.existsSync(root)) return null
 
-  for (const file of files) {
-    let raw = ''
+  // Try DB lookup first: claude_sessions stores project_slug
+  try {
+    const db = getDatabase()
+    const row = db.prepare('SELECT project_slug FROM claude_sessions WHERE session_id = ?').get(sessionId) as { project_slug: string } | undefined
+    if (row?.project_slug) {
+      const direct = path.join(root, row.project_slug, `${sessionId}.jsonl`)
+      if (fs.existsSync(direct)) return direct
+    }
+  } catch { /* DB unavailable, fall through */ }
+
+  // Fallback: scan project dirs for the file (no recursive walk of all files)
+  try {
+    for (const dir of fs.readdirSync(root)) {
+      const candidate = path.join(root, dir, `${sessionId}.jsonl`)
+      if (fs.existsSync(candidate)) return candidate
+    }
+  } catch { /* ignore */ }
+
+  return null
+}
+
+function parseClaudeJsonl(raw: string, sessionId: string): TranscriptMessage[] {
+  const out: TranscriptMessage[] = []
+  const lines = raw.split('\n').filter(Boolean)
+
+  for (const line of lines) {
+    let parsed: any
     try {
-      raw = fs.readFileSync(file, 'utf-8')
+      parsed = JSON.parse(line)
     } catch {
       continue
     }
 
-    const lines = raw.split('\
-').filter(Boolean)
-    for (const line of lines) {
-      let parsed: any
-      try {
-        parsed = JSON.parse(line)
-      } catch {
-        continue
-      }
+    if (parsed?.sessionId !== sessionId || parsed?.isSidechain) continue
 
-      if (parsed?.sessionId !== sessionId || parsed?.isSidechain) continue
-
-      const ts = typeof parsed?.timestamp === 'string' ? parsed.timestamp : undefined
-      if (parsed?.type === 'user') {
-        const rawContent = parsed?.message?.content
-        // Check if this is a tool_result array (not real user input)
-        if (Array.isArray(rawContent) && rawContent.some((b: any) => b?.type === 'tool_result')) {
-          const parts: MessageContentPart[] = []
-          for (const block of rawContent) {
-            if (block?.type === 'tool_result') {
-              const resultContent = typeof block.content === 'string'
-                ? block.content
-                : Array.isArray(block.content)
-                  ? block.content.map((c: any) => c?.text || '').join('\n')
-                  : ''
-              if (resultContent.trim()) {
-                parts.push({
-                  type: 'tool_result',
-                  toolUseId: block.tool_use_id || '',
-                  content: resultContent.trim().slice(0, 8000),
-                  isError: block.is_error === true,
-                })
-              }
-            }
-          }
-          pushMessage(out, 'system', parts, ts)
-        } else {
-          const content = typeof rawContent === 'string'
-            ? rawContent
-            : Array.isArray(rawContent)
-              ? rawContent.map((b: any) => b?.text || '').join('\n').trim()
-              : ''
-          const part = textPart(content)
-          if (part) pushMessage(out, 'user', [part], ts)
-        }
-      } else if (parsed?.type === 'assistant') {
+    const ts = typeof parsed?.timestamp === 'string' ? parsed.timestamp : undefined
+    if (parsed?.type === 'user') {
+      const rawContent = parsed?.message?.content
+      if (Array.isArray(rawContent) && rawContent.some((b: any) => b?.type === 'tool_result')) {
         const parts: MessageContentPart[] = []
-        if (Array.isArray(parsed?.message?.content)) {
-          for (const block of parsed.message.content) {
-            if (block?.type === 'thinking' && typeof block?.thinking === 'string') {
-              const thinking = block.thinking.trim()
-              if (thinking) {
-                parts.push({ type: 'thinking', thinking: thinking.slice(0, 4000) })
-              }
-            } else if (block?.type === 'text' && typeof block?.text === 'string') {
-              const part = textPart(block.text)
-              if (part) parts.push(part)
-            } else if (block?.type === 'tool_use') {
+        for (const block of rawContent) {
+          if (block?.type === 'tool_result') {
+            const resultContent = typeof block.content === 'string'
+              ? block.content
+              : Array.isArray(block.content)
+                ? block.content.map((c: any) => c?.text || '').join('\n')
+                : ''
+            if (resultContent.trim()) {
               parts.push({
-                type: 'tool_use',
-                id: block.id || '',
-                name: block.name || 'unknown',
-                input: JSON.stringify(block.input || {}).slice(0, 500),
+                type: 'tool_result',
+                toolUseId: block.tool_use_id || '',
+                content: resultContent.trim().slice(0, 8000),
+                isError: block.is_error === true,
               })
             }
           }
         }
-        pushMessage(out, 'assistant', parts, ts)
+        pushMessage(out, 'system', parts, ts)
+      } else {
+        const content = typeof rawContent === 'string'
+          ? rawContent
+          : Array.isArray(rawContent)
+            ? rawContent.map((b: any) => b?.text || '').join('\n').trim()
+            : ''
+        const part = textPart(content)
+        if (part) pushMessage(out, 'user', [part], ts)
       }
+    } else if (parsed?.type === 'assistant') {
+      const parts: MessageContentPart[] = []
+      if (Array.isArray(parsed?.message?.content)) {
+        for (const block of parsed.message.content) {
+          if (block?.type === 'thinking' && typeof block?.thinking === 'string') {
+            const thinking = block.thinking.trim()
+            if (thinking) {
+              parts.push({ type: 'thinking', thinking: thinking.slice(0, 4000) })
+            }
+          } else if (block?.type === 'text' && typeof block?.text === 'string') {
+            const part = textPart(block.text)
+            if (part) parts.push(part)
+          } else if (block?.type === 'tool_use') {
+            parts.push({
+              type: 'tool_use',
+              id: block.id || '',
+              name: block.name || 'unknown',
+              input: JSON.stringify(block.input || {}).slice(0, 500),
+            })
+          }
+        }
+      }
+      pushMessage(out, 'assistant', parts, ts)
     }
   }
 
-  const sorted = out
-    .slice()
-    .sort((a, b) => messageTimestampMs(a) - messageTimestampMs(b))
+  return out
+}
+
+function readClaudeTranscript(sessionId: string, limit: number): TranscriptMessage[] {
+  // Direct file lookup instead of scanning 866+ JSONL files
+  const file = findSessionFile(sessionId)
+  if (!file) return []
+
+  let raw = ''
+  try {
+    raw = fs.readFileSync(file, 'utf-8')
+  } catch {
+    return []
+  }
+
+  const out = parseClaudeJsonl(raw, sessionId)
+  const sorted = out.slice().sort((a, b) => messageTimestampMs(a) - messageTimestampMs(b))
   return sorted.slice(-limit)
 }
 
