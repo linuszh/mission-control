@@ -199,20 +199,123 @@ function readClaudeTranscript(sessionId: string, limit: number): TranscriptMessa
   return sorted.slice(-limit)
 }
 
-function readCodexTranscript(sessionId: string, limit: number): TranscriptMessage[] {
-  const root = path.join(config.homeDir, '.codex', 'sessions')
-  const files = listRecentFiles(root, '.jsonl', 300)
-  const out: TranscriptMessage[] = []
+/** Find the JSONL file for a codex session by direct path lookup. */
+function findCodexSessionFile(root: string, sessionId: string): string | null {
+  if (!root || !fs.existsSync(root)) return null
 
-  for (const file of files) {
-    let raw = ''
+  // 1. Direct match: <root>/<sessionId>.jsonl
+  const direct = path.join(root, `${sessionId}.jsonl`)
+  if (fs.existsSync(direct)) return direct
+
+  // 2. Shallow scan of immediate subdirectories only
+  let subdirs: string[] = []
+  try {
+    subdirs = fs.readdirSync(root)
+  } catch {
+    return null
+  }
+
+  for (const entry of subdirs) {
+    const entryPath = path.join(root, entry)
+    let stat: fs.Stats
     try {
-      raw = fs.readFileSync(file, 'utf-8')
+      stat = fs.statSync(entryPath)
     } catch {
       continue
     }
 
-    let matchedSession = file.includes(sessionId)
+    if (stat.isDirectory()) {
+      // Check for exact match inside subdir
+      const candidate = path.join(entryPath, `${sessionId}.jsonl`)
+      if (fs.existsSync(candidate)) return candidate
+
+      // Check if any file in the subdir has a name that contains the sessionId
+      let subEntries: string[] = []
+      try {
+        subEntries = fs.readdirSync(entryPath)
+      } catch {
+        continue
+      }
+      for (const subEntry of subEntries) {
+        if (subEntry.includes(sessionId) && subEntry.endsWith('.jsonl')) {
+          return path.join(entryPath, subEntry)
+        }
+      }
+    } else if (stat.isFile() && entry.includes(sessionId) && entry.endsWith('.jsonl')) {
+      // File directly in root whose name contains the sessionId
+      return entryPath
+    }
+  }
+
+  return null
+}
+
+function parseCodexJsonl(raw: string, sessionId: string): TranscriptMessage[] {
+  const out: TranscriptMessage[] = []
+  const lines = raw.split(/\r?\n/).filter(Boolean)
+  // A file found via filename match is already confirmed; otherwise require a
+  // session_meta record to confirm the session ID before accepting entries.
+  let confirmed = false
+
+  for (const line of lines) {
+    let parsed: any
+    try {
+      parsed = JSON.parse(line)
+    } catch {
+      continue
+    }
+
+    if (!confirmed && parsed?.type === 'session_meta' && parsed?.payload?.id === sessionId) {
+      confirmed = true
+    }
+    if (!confirmed) continue
+
+    const ts = typeof parsed?.timestamp === 'string' ? parsed.timestamp : undefined
+    if (parsed?.type === 'response_item') {
+      const payload = parsed?.payload
+      if (payload?.type === 'message') {
+        const role = payload?.role === 'assistant' ? 'assistant' as const : 'user' as const
+        const parts: MessageContentPart[] = []
+        if (typeof payload?.content === 'string') {
+          const part = textPart(payload.content)
+          if (part) parts.push(part)
+        } else if (Array.isArray(payload?.content)) {
+          for (const block of payload.content) {
+            const blockType = String(block?.type || '')
+            if ((blockType === 'text' || blockType === 'input_text' || blockType === 'output_text') && typeof block?.text === 'string') {
+              const part = textPart(block.text)
+              if (part) parts.push(part)
+            }
+          }
+        }
+        pushMessage(out, role, parts, ts)
+      }
+    }
+  }
+
+  return out
+}
+
+function readCodexTranscript(sessionId: string, limit: number): TranscriptMessage[] {
+  const root = path.join(config.homeDir, '.codex', 'sessions')
+  const file = findCodexSessionFile(root, sessionId)
+  if (!file) return []
+
+  let raw = ''
+  try {
+    raw = fs.readFileSync(file, 'utf-8')
+  } catch {
+    return []
+  }
+
+  // If the file was located because its filename contains the sessionId we can
+  // treat every entry as belonging to this session; otherwise the parser will
+  // require a session_meta record to confirm the match.
+  const filenameMatchesId = path.basename(file).includes(sessionId)
+  let out: TranscriptMessage[]
+  if (filenameMatchesId) {
+    // Parse directly — skip the session_meta gate since filename already confirms it.
+    out = []
     const lines = raw.split(/\r?\n/).filter(Boolean)
     for (const line of lines) {
       let parsed: any
@@ -221,12 +324,6 @@ function readCodexTranscript(sessionId: string, limit: number): TranscriptMessag
       } catch {
         continue
       }
-
-      if (!matchedSession && parsed?.type === 'session_meta' && parsed?.payload?.id === sessionId) {
-        matchedSession = true
-      }
-      if (!matchedSession) continue
-
       const ts = typeof parsed?.timestamp === 'string' ? parsed.timestamp : undefined
       if (parsed?.type === 'response_item') {
         const payload = parsed?.payload
@@ -249,6 +346,8 @@ function readCodexTranscript(sessionId: string, limit: number): TranscriptMessag
         }
       }
     }
+  } else {
+    out = parseCodexJsonl(raw, sessionId)
   }
 
   const sorted = out.slice().sort((a, b) => messageTimestampMs(a) - messageTimestampMs(b))
