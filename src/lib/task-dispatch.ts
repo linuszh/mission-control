@@ -396,9 +396,14 @@ export async function runAegisReviews(): Promise<{ ok: boolean; message: string 
   const results: Array<{ id: number; verdict: string; error?: string }> = []
 
   for (const task of tasks) {
-    // Move to quality_review to prevent re-processing
-    db.prepare('UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?')
+    // Move to quality_review to prevent re-processing; check status to avoid TOCTOU race
+    const claimResult = db.prepare("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ? AND status = 'review'")
       .run('quality_review', Math.floor(Date.now() / 1000), task.id)
+
+    if (claimResult.changes === 0) {
+      // Another tick already claimed this task — skip it
+      continue
+    }
 
     eventBus.broadcast('task.status_changed', {
       id: task.id,
@@ -674,8 +679,8 @@ async function runClaudeCodeTask(
     workspaceId: task.workspace_id,
   })
 
-  // Mark agent as busy
-  db.prepare('UPDATE agents SET status = ?, last_seen = ?, last_activity = ?, updated_at = ? WHERE id = ?')
+  // Mark agent as busy; don't overwrite error/offline status
+  db.prepare("UPDATE agents SET status = ?, last_seen = ?, last_activity = ?, updated_at = ? WHERE id = ? AND status NOT IN ('error', 'offline')")
     .run('busy', now, `Running task: ${task.title}`, now, task.agent_id)
   eventBus.broadcast('agent.status_changed', {
     id: task.agent_id,
@@ -706,9 +711,9 @@ async function runClaudeCodeTask(
     const durationMs = Date.now() - startTime
     recordSpawnFinish(spawnId, { status: 'completed', durationMs })
 
-    // Mark agent as idle
+    // Mark agent as idle; only transition from 'busy' to avoid overwriting unrelated status changes
     const afterNow = Math.floor(Date.now() / 1000)
-    db.prepare('UPDATE agents SET status = ?, last_seen = ?, last_activity = ?, updated_at = ? WHERE id = ?')
+    db.prepare("UPDATE agents SET status = ?, last_seen = ?, last_activity = ?, updated_at = ? WHERE id = ? AND status = 'busy'")
       .run('idle', afterNow, `Completed task: ${task.title}`, afterNow, task.agent_id)
     eventBus.broadcast('agent.status_changed', {
       id: task.agent_id,
@@ -722,9 +727,9 @@ async function runClaudeCodeTask(
     const durationMs = Date.now() - startTime
     recordSpawnFinish(spawnId, { status: 'failed', error: err.message, durationMs })
 
-    // Mark agent as idle even on failure
+    // Mark agent as idle even on failure; only transition from 'busy'
     const afterNow = Math.floor(Date.now() / 1000)
-    db.prepare('UPDATE agents SET status = ?, last_seen = ?, updated_at = ? WHERE id = ?')
+    db.prepare("UPDATE agents SET status = ?, last_seen = ?, updated_at = ? WHERE id = ? AND status = 'busy'")
       .run('idle', afterNow, afterNow, task.agent_id)
     eventBus.broadcast('agent.status_changed', {
       id: task.agent_id,
