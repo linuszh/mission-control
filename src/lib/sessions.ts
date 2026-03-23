@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { config } from './config'
+import { readFileSafe } from '@/lib/safe-utils'
 
 export interface GatewaySession {
   /** Session store key, e.g. "agent:<agent>:main" */
@@ -73,13 +74,17 @@ export function getAllGatewaySessions(activeWithinMs = 60 * 60 * 1000, force = f
     raw = _sessionCache.data
   } else {
     const sessions: RawSession[] = []
+    const MAX_SESSIONS_PER_AGENT = 500
     for (const sessionsFile of getGatewaySessionStoreFiles()) {
       const agentName = path.basename(path.dirname(path.dirname(sessionsFile)))
       try {
-        const fileContent = fs.readFileSync(sessionsFile, 'utf-8')
+        const fileContent = readFileSafe(sessionsFile, { maxBytes: 1024 * 1024 })
+        if (fileContent === null) continue
         const data = JSON.parse(fileContent)
 
+        let agentSessionCount = 0
         for (const [key, entry] of Object.entries(data)) {
+          if (agentSessionCount >= MAX_SESSIONS_PER_AGENT) break
           const s = entry as Record<string, any>
           const updatedAt = s.updatedAt || 0
           sessions.push({
@@ -95,6 +100,7 @@ export function getAllGatewaySessions(activeWithinMs = 60 * 60 * 1000, force = f
             outputTokens: s.outputTokens || 0,
             contextTokens: s.contextTokens || 0,
           })
+          agentSessionCount++
         }
       } catch {
         // Skip agents without valid session files
