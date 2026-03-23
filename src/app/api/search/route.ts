@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireRole } from '@/lib/auth'
 import { getDatabase } from '@/lib/db'
 import { heavyLimiter } from '@/lib/rate-limit'
+import { escapeLikeWildcards } from '@/lib/safe-utils'
 
 interface SearchResult {
   type: 'task' | 'agent' | 'activity' | 'audit' | 'message' | 'notification' | 'webhook' | 'pipeline'
@@ -35,7 +36,8 @@ export async function GET(request: NextRequest) {
 
   const db = getDatabase()
   const workspaceId = auth.user.workspace_id ?? 1
-  const likeQ = `%${query}%`
+  const safeQuery = escapeLikeWildcards(query)
+  const likeQ = `%${safeQuery}%`
   const results: SearchResult[] = []
 
   // Search tasks
@@ -43,7 +45,7 @@ export async function GET(request: NextRequest) {
     try {
       const tasks = db.prepare(`
         SELECT id, title, description, status, assigned_to, created_at
-        FROM tasks WHERE workspace_id = ? AND (title LIKE ? OR description LIKE ? OR assigned_to LIKE ?)
+        FROM tasks WHERE workspace_id = ? AND (title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR assigned_to LIKE ? ESCAPE '\\')
         ORDER BY created_at DESC LIMIT ?
       `).all(workspaceId, likeQ, likeQ, likeQ, limit) as any[]
       for (const t of tasks) {
@@ -65,7 +67,7 @@ export async function GET(request: NextRequest) {
     try {
       const agents = db.prepare(`
         SELECT id, name, role, status, last_activity, created_at
-        FROM agents WHERE workspace_id = ? AND (name LIKE ? OR role LIKE ? OR last_activity LIKE ?)
+        FROM agents WHERE workspace_id = ? AND (name LIKE ? ESCAPE '\\' OR role LIKE ? ESCAPE '\\' OR last_activity LIKE ? ESCAPE '\\')
         ORDER BY created_at DESC LIMIT ?
       `).all(workspaceId, likeQ, likeQ, likeQ, limit) as any[]
       for (const a of agents) {
@@ -87,7 +89,7 @@ export async function GET(request: NextRequest) {
     try {
       const activities = db.prepare(`
         SELECT id, type, actor, description, created_at
-        FROM activities WHERE workspace_id = ? AND (description LIKE ? OR actor LIKE ?)
+        FROM activities WHERE workspace_id = ? AND (description LIKE ? ESCAPE '\\' OR actor LIKE ? ESCAPE '\\')
         ORDER BY created_at DESC LIMIT ?
       `).all(workspaceId, likeQ, likeQ, limit) as any[]
       for (const a of activities) {
@@ -108,7 +110,7 @@ export async function GET(request: NextRequest) {
     try {
       const audits = db.prepare(`
         SELECT id, action, actor, detail, created_at
-        FROM audit_log WHERE action LIKE ? OR actor LIKE ? OR detail LIKE ?
+        FROM audit_log WHERE action LIKE ? ESCAPE '\\' OR actor LIKE ? ESCAPE '\\' OR detail LIKE ? ESCAPE '\\'
         ORDER BY created_at DESC LIMIT ?
       `).all(likeQ, likeQ, likeQ, limit) as any[]
       for (const a of audits) {
@@ -130,7 +132,7 @@ export async function GET(request: NextRequest) {
     try {
       const messages = db.prepare(`
         SELECT id, from_agent, to_agent, content, conversation_id, created_at
-        FROM messages WHERE workspace_id = ? AND (content LIKE ? OR from_agent LIKE ?)
+        FROM messages WHERE workspace_id = ? AND (content LIKE ? ESCAPE '\\' OR from_agent LIKE ? ESCAPE '\\')
         ORDER BY created_at DESC LIMIT ?
       `).all(workspaceId, likeQ, likeQ, limit) as any[]
       for (const m of messages) {
@@ -152,7 +154,7 @@ export async function GET(request: NextRequest) {
     try {
       const webhooks = db.prepare(`
         SELECT id, name, url, events, created_at
-        FROM webhooks WHERE workspace_id = ? AND (name LIKE ? OR url LIKE ?)
+        FROM webhooks WHERE workspace_id = ? AND (name LIKE ? ESCAPE '\\' OR url LIKE ? ESCAPE '\\')
         ORDER BY created_at DESC LIMIT ?
       `).all(workspaceId, likeQ, likeQ, limit) as any[]
       for (const w of webhooks) {
@@ -173,7 +175,7 @@ export async function GET(request: NextRequest) {
     try {
       const pipelines = db.prepare(`
         SELECT id, name, description, created_at
-        FROM workflow_pipelines WHERE workspace_id = ? AND (name LIKE ? OR description LIKE ?)
+        FROM workflow_pipelines WHERE workspace_id = ? AND (name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\')
         ORDER BY created_at DESC LIMIT ?
       `).all(workspaceId, likeQ, likeQ, limit) as any[]
       for (const p of pipelines) {
