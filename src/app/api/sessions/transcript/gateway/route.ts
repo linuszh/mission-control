@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { requireRole } from '@/lib/auth'
 import { config } from '@/lib/config'
 import { logger } from '@/lib/logger'
 import { parseGatewayHistoryTranscript, parseJsonlTranscript } from '@/lib/transcript-parser'
 import { callOpenClawGateway } from '@/lib/openclaw-gateway'
+import { readFileSafe } from '@/lib/safe-utils'
 
 /**
  * GET /api/sessions/transcript/gateway?key=<session-key>&limit=50
@@ -61,9 +62,13 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ messages: [], source: 'gateway', error: 'Agent sessions file not found' })
     }
 
+    const sessionsRaw = readFileSafe(sessionsFile, { maxBytes: 1 * 1024 * 1024 })
+    if (!sessionsRaw) {
+      return NextResponse.json({ messages: [], source: 'gateway', error: 'Could not read sessions.json' })
+    }
     let sessionsData: Record<string, any>
     try {
-      sessionsData = JSON.parse(readFileSync(sessionsFile, 'utf-8'))
+      sessionsData = JSON.parse(sessionsRaw)
     } catch {
       return NextResponse.json({ messages: [], source: 'gateway', error: 'Could not parse sessions.json' })
     }
@@ -80,7 +85,10 @@ export async function GET(request: NextRequest) {
     }
 
     // Read and parse the JSONL file
-    const raw = readFileSync(jsonlPath, 'utf-8')
+    const raw = readFileSafe(jsonlPath, { maxBytes: 10 * 1024 * 1024 })
+    if (!raw) {
+      return NextResponse.json({ messages: [], source: 'gateway', error: 'Session JSONL file is too large or unreadable' })
+    }
     const messages = parseJsonlTranscript(raw, limit)
 
     return NextResponse.json({ messages, source: 'gateway' })
