@@ -18,6 +18,8 @@ export async function GET(request: NextRequest) {
 
   const encoder = new TextEncoder()
 
+  let cleanup: (() => void) | null = null
+
   const stream = new ReadableStream({
     start(controller) {
       const send = (event: ServerEvent) => {
@@ -42,12 +44,18 @@ export async function GET(request: NextRequest) {
         }
       }, 30_000)
 
-      // Cleanup on close
-      request.signal.addEventListener('abort', () => {
+      cleanup = () => {
         eventBus.off('server-event', send)
         clearInterval(heartbeat)
         try { controller.close() } catch { /* already closed */ }
-      })
+      }
+
+      // Cleanup on abort
+      request.signal.addEventListener('abort', () => { cleanup?.(); cleanup = null }, { once: true })
+    },
+    cancel() {
+      cleanup?.()
+      cleanup = null
     },
   })
 
