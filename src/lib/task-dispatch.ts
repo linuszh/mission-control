@@ -780,9 +780,16 @@ export async function dispatchAssignedTasks(): Promise<{ ok: boolean; message: s
   const now = Math.floor(Date.now() / 1000)
 
   for (const task of readyTasks) {
-    // Mark as in_progress immediately to prevent re-dispatch
-    db.prepare('UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?')
+    // Mark as in_progress immediately to prevent re-dispatch.
+    // Use optimistic locking: only claim the task if it is still 'assigned'.
+    // If another dispatcher already claimed it, changes will be 0 — skip.
+    const claimResult = db.prepare('UPDATE tasks SET status = ?, updated_at = ? WHERE id = ? AND status = \'assigned\'')
       .run('in_progress', now, task.id)
+
+    if (claimResult.changes === 0) {
+      logger.info({ taskId: task.id }, 'Task already claimed by another dispatcher, skipping')
+      continue
+    }
 
     eventBus.broadcast('task.status_changed', {
       id: task.id,
@@ -1124,8 +1131,10 @@ export async function autoRouteInboxTasks(): Promise<{ ok: boolean; message: str
         return c < 3
       })
       if (!alt) continue // all agents at capacity
-      db.prepare('UPDATE tasks SET status = ?, assigned_to = ?, updated_at = ? WHERE id = ?')
+      const altResult = db.prepare('UPDATE tasks SET status = ?, assigned_to = ?, updated_at = ? WHERE id = ? AND status = \'inbox\'')
         .run('assigned', alt.agent.name, now, task.id)
+
+      if (altResult.changes === 0) continue // task was concurrently assigned elsewhere
 
       db_helpers.logActivity('task_auto_routed', 'task', task.id, 'scheduler',
         `Auto-assigned "${task.title}" to ${alt.agent.name} (${alt.agent.role}, score: ${alt.score})`,
@@ -1137,8 +1146,10 @@ export async function autoRouteInboxTasks(): Promise<{ ok: boolean; message: str
       continue
     }
 
-    db.prepare('UPDATE tasks SET status = ?, assigned_to = ?, updated_at = ? WHERE id = ?')
+    const bestResult = db.prepare('UPDATE tasks SET status = ?, assigned_to = ?, updated_at = ? WHERE id = ? AND status = \'inbox\'')
       .run('assigned', best.name, now, task.id)
+
+    if (bestResult.changes === 0) continue // task was concurrently assigned elsewhere
 
     db_helpers.logActivity('task_auto_routed', 'task', task.id, 'scheduler',
       `Auto-assigned "${task.title}" to ${best.name} (${best.role}, score: ${scored[0].score})`,

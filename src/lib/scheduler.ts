@@ -511,6 +511,11 @@ export function getSchedulerStatus() {
 
 /** Manually trigger a scheduled task */
 export async function triggerTask(taskId: string): Promise<{ ok: boolean; message: string }> {
+  const task = tasks.get(taskId)
+  if (task?.running) {
+    return { ok: false, message: 'Task is already running' }
+  }
+
   if (taskId === 'auto_backup') return runBackup()
   if (taskId === 'auto_cleanup') return runCleanup()
   if (taskId === 'agent_heartbeat') return runHeartbeatCheck()
