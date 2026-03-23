@@ -104,11 +104,11 @@ export async function GET(request: NextRequest) {
     
     // Get unread count for this recipient
     const unreadCount = db.prepare(`
-      SELECT COUNT(*) as count 
-      FROM notifications 
+      SELECT COUNT(*) as count
+      FROM notifications
       WHERE recipient = ? AND read_at IS NULL AND workspace_id = ?
-    `).get(recipient, workspaceId) as { count: number };
-    
+    `).get(recipient, workspaceId) as { count: number } | undefined;
+
     // Get total count for pagination
     let countQuery = 'SELECT COUNT(*) as total FROM notifications WHERE recipient = ? AND workspace_id = ?';
     const countParams: any[] = [recipient, workspaceId];
@@ -119,14 +119,14 @@ export async function GET(request: NextRequest) {
       countQuery += ' AND type = ?';
       countParams.push(type);
     }
-    const countRow = db.prepare(countQuery).get(...countParams) as { total: number };
+    const countRow = db.prepare(countQuery).get(...countParams) as { total: number } | undefined;
 
     return NextResponse.json({
       notifications: enhancedNotifications,
-      total: countRow.total,
+      total: countRow?.total ?? 0,
       page: Math.floor(offset / limit) + 1,
       limit,
-      unreadCount: unreadCount.count
+      unreadCount: unreadCount?.count ?? 0
     });
   } catch (error) {
     logger.error({ err: error }, 'GET /api/notifications error');

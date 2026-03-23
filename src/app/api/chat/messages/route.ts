@@ -310,9 +310,9 @@ export async function GET(request: NextRequest) {
       countQuery += ' AND created_at > ?'
       countParams.push(parseInt(since))
     }
-    const countRow = db.prepare(countQuery).get(...countParams) as { total: number }
+    const countRow = db.prepare(countQuery).get(...countParams) as { total: number } | undefined
 
-    return NextResponse.json({ messages: parsed, total: countRow.total, page: Math.floor(offset / limit) + 1, limit })
+    return NextResponse.json({ messages: parsed, total: countRow?.total ?? 0, page: Math.floor(offset / limit) + 1, limit })
   } catch (error) {
     logger.error({ err: error }, 'GET /api/chat/messages error')
     return NextResponse.json({ error: 'Failed to fetch messages' }, { status: 500 })
