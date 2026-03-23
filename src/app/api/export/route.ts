@@ -44,7 +44,7 @@ export async function GET(request: NextRequest) {
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
 
   const requestedLimit = parseInt(searchParams.get('limit') || '10000')
-  const maxLimit = 50000
+  const maxLimit = 10000
   const limit = Math.min(requestedLimit, maxLimit)
 
   let rows: any[] = []
