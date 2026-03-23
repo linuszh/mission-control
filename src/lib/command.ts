@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process'
 import { config } from './config'
 
+const MAX_BUFFER_BYTES = 10 * 1024 * 1024 // 10MB per stream
+
 interface CommandOptions {
   cwd?: string
   env?: NodeJS.ProcessEnv
@@ -20,14 +22,22 @@ export function runCommand(
   options: CommandOptions = {}
 ): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd: options.cwd,
-      env: options.env,
-      shell: false
-    })
+    let child
+    try {
+      child = spawn(command, args, {
+        cwd: options.cwd,
+        env: options.env,
+        shell: false
+      })
+    } catch (err) {
+      reject(err)
+      return
+    }
 
     let stdout = ''
     let stderr = ''
+    let stdoutLen = 0
+    let stderrLen = 0
     let timeoutId: NodeJS.Timeout | undefined
 
     if (options.timeoutMs) {
@@ -36,12 +46,18 @@ export function runCommand(
       }, options.timeoutMs)
     }
 
-    child.stdout.on('data', (data) => {
-      stdout += data.toString()
+    child.stdout.on('data', (data: Buffer) => {
+      if (stdoutLen < MAX_BUFFER_BYTES) {
+        stdout += data.toString()
+      }
+      stdoutLen += data.length
     })
 
-    child.stderr.on('data', (data) => {
-      stderr += data.toString()
+    child.stderr.on('data', (data: Buffer) => {
+      if (stderrLen < MAX_BUFFER_BYTES) {
+        stderr += data.toString()
+      }
+      stderrLen += data.length
     })
 
     child.on('error', (error) => {
