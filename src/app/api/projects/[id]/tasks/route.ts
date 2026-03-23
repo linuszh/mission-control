@@ -6,6 +6,7 @@ import {
   ensureTenantWorkspaceAccess,
   ForbiddenError
 } from '@/lib/workspaces'
+import { safeJsonParse } from '@/lib/safe-utils'
 
 function formatTicketRef(prefix?: string | null, num?: number | null): string | undefined {
   if (!prefix || typeof num !== 'number' || !Number.isFinite(num) || num <= 0) return undefined
@@ -64,8 +65,8 @@ export async function GET(
       project,
       tasks: tasks.map((task: any) => ({
         ...task,
-        tags: task.tags ? JSON.parse(task.tags) : [],
-        metadata: task.metadata ? JSON.parse(task.metadata) : {},
+        tags: safeJsonParse(task.tags, []),
+        metadata: safeJsonParse(task.metadata, {}),
         ticket_ref: formatTicketRef(task.project_prefix, task.project_ticket_no),
       }))
     })

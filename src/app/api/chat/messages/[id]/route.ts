@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getDatabase, Message } from '@/lib/db'
 import { requireRole } from '@/lib/auth'
 import { logger } from '@/lib/logger'
+import { safeJsonParse } from '@/lib/safe-utils'
 
 /**
  * GET /api/chat/messages/[id] - Get a single message
@@ -29,7 +30,7 @@ export async function GET(
     return NextResponse.json({
       message: {
         ...message,
-        metadata: message.metadata ? JSON.parse(message.metadata) : null
+        metadata: message.metadata ? safeJsonParse(message.metadata, null) : null
       }
     })
   } catch (error) {
@@ -74,7 +75,7 @@ export async function PATCH(
     return NextResponse.json({
       message: {
         ...updated,
-        metadata: updated.metadata ? JSON.parse(updated.metadata) : null
+        metadata: updated.metadata ? safeJsonParse(updated.metadata, null) : null
       }
     })
   } catch (error) {

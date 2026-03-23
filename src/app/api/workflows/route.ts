@@ -5,6 +5,7 @@ import { validateBody, createWorkflowSchema } from '@/lib/validation'
 import { mutationLimiter } from '@/lib/rate-limit'
 import { logger } from '@/lib/logger'
 import { scanForInjection } from '@/lib/injection-guard'
+import { safeJsonParse } from '@/lib/safe-utils'
 
 export interface WorkflowTemplate {
   id: number
@@ -38,7 +39,7 @@ export async function GET(request: NextRequest) {
 
     const parsed = templates.map(t => ({
       ...t,
-      tags: t.tags ? JSON.parse(t.tags) : [],
+      tags: safeJsonParse(t.tags ?? '', []),
     }))
 
     return NextResponse.json({ templates: parsed })
@@ -110,7 +111,7 @@ export async function POST(request: NextRequest) {
     )
 
     return NextResponse.json({
-      template: { ...template, tags: template.tags ? JSON.parse(template.tags) : [] }
+      template: { ...template, tags: safeJsonParse(template.tags ?? '', []) }
     }, { status: 201 })
   } catch (error) {
     logger.error({ err: error }, 'POST /api/workflows error')
@@ -172,7 +173,7 @@ export async function PUT(request: NextRequest) {
     const updated = db
       .prepare('SELECT * FROM workflow_templates WHERE id = ? AND workspace_id = ?')
       .get(id, workspaceId) as WorkflowTemplate
-    return NextResponse.json({ template: { ...updated, tags: updated.tags ? JSON.parse(updated.tags) : [] } })
+    return NextResponse.json({ template: { ...updated, tags: safeJsonParse(updated.tags ?? '', []) } })
   } catch (error) {
     logger.error({ err: error }, 'PUT /api/workflows error')
     return NextResponse.json({ error: 'Failed to update template' }, { status: 500 })

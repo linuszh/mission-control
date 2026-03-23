@@ -12,6 +12,7 @@ import { runOpenClaw } from '@/lib/command';
 import { config as appConfig } from '@/lib/config';
 import { resolveWithin } from '@/lib/paths';
 import path from 'node:path';
+import { safeJsonParse } from '@/lib/safe-utils';
 
 /**
  * GET /api/agents - List all agents with optional filtering
@@ -60,7 +61,7 @@ export async function GET(request: NextRequest) {
     // Parse JSON config field
     const agentsWithParsedData = agents.map(agent => ({
       ...agent,
-      config: enrichAgentConfigFromWorkspace(agent.config ? JSON.parse(agent.config) : {})
+      config: enrichAgentConfigFromWorkspace(safeJsonParse(agent.config ?? '', {}))
     }));
     
     // Get task counts for all listed agents in one query (avoids N+1 queries)
@@ -132,11 +133,11 @@ export async function GET(request: NextRequest) {
       countQuery += ' AND role = ?';
       countParams.push(role);
     }
-    const countRow = db.prepare(countQuery).get(...countParams) as { total: number };
+    const countRow = db.prepare(countQuery).get(...countParams) as { total: number } | undefined;
 
     return NextResponse.json({
       agents: agentsWithStats,
-      total: countRow.total,
+      total: countRow?.total ?? 0,
       page: Math.floor(offset / limit) + 1,
       limit
     });
@@ -281,7 +282,7 @@ export async function POST(request: NextRequest) {
       .get(agentId, workspaceId) as Agent;
     const parsedAgent = {
       ...createdAgent,
-      config: JSON.parse(createdAgent.config || '{}'),
+      config: safeJsonParse(createdAgent.config ?? '', {}),
       taskStats: { total: 0, assigned: 0, in_progress: 0, quality_review: 0, done: 0, completed: 0 }
     };
 

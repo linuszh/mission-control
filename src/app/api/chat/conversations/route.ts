@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getDatabase } from '@/lib/db'
 import { requireRole } from '@/lib/auth'
 import { logger } from '@/lib/logger'
+import { safeJsonParse } from '@/lib/safe-utils'
 
 /**
  * GET /api/chat/conversations - List conversations derived from messages
@@ -74,7 +75,7 @@ export async function GET(request: NextRequest) {
         last_message: lastMsg
           ? {
               ...lastMsg,
-              metadata: lastMsg.metadata ? JSON.parse(lastMsg.metadata) : null
+              metadata: lastMsg.metadata ? safeJsonParse(lastMsg.metadata, null) : null
             }
           : null
       }
@@ -93,9 +94,9 @@ export async function GET(request: NextRequest) {
     } else {
       countQuery = 'SELECT COUNT(DISTINCT conversation_id) as total FROM messages WHERE workspace_id = ?'
     }
-    const countRow = db.prepare(countQuery).get(...countParams) as { total: number }
+    const countRow = db.prepare(countQuery).get(...countParams) as { total: number } | undefined
 
-    return NextResponse.json({ conversations: withLastMessage, total: countRow.total, page: Math.floor(offset / limit) + 1, limit })
+    return NextResponse.json({ conversations: withLastMessage, total: countRow?.total ?? 0, page: Math.floor(offset / limit) + 1, limit })
   } catch (error) {
     logger.error({ err: error }, 'GET /api/chat/conversations error')
     return NextResponse.json({ error: 'Failed to fetch conversations' }, { status: 500 })

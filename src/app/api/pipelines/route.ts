@@ -4,6 +4,7 @@ import { requireRole } from '@/lib/auth'
 import { validateBody, createPipelineSchema } from '@/lib/validation'
 import { mutationLimiter } from '@/lib/rate-limit'
 import { logger } from '@/lib/logger'
+import { safeJsonParse } from '@/lib/safe-utils'
 
 export interface PipelineStep {
   template_id: number
@@ -52,7 +53,7 @@ export async function GET(request: NextRequest) {
     const runMap = new Map(runCounts.map(r => [r.pipeline_id, r]))
 
     const parsed = pipelines.map(p => {
-      const steps: PipelineStep[] = JSON.parse(p.steps || '[]')
+      const steps: PipelineStep[] = safeJsonParse(p.steps, [])
       return {
         ...p,
         steps: steps.map(s => ({ ...s, template_name: nameMap.get(s.template_id) || 'Unknown' })),
@@ -117,7 +118,7 @@ export async function POST(request: NextRequest) {
     const pipeline = db
       .prepare('SELECT * FROM workflow_pipelines WHERE id = ? AND workspace_id = ?')
       .get(insertResult.lastInsertRowid, workspaceId) as Pipeline
-    return NextResponse.json({ pipeline: { ...pipeline, steps: JSON.parse(pipeline.steps) } }, { status: 201 })
+    return NextResponse.json({ pipeline: { ...pipeline, steps: safeJsonParse(pipeline.steps, []) } }, { status: 201 })
   } catch (error) {
     logger.error({ err: error }, 'POST /api/pipelines error')
     return NextResponse.json({ error: 'Failed to create pipeline' }, { status: 500 })
@@ -169,7 +170,7 @@ export async function PUT(request: NextRequest) {
     const updated = db
       .prepare('SELECT * FROM workflow_pipelines WHERE id = ? AND workspace_id = ?')
       .get(id, workspaceId) as Pipeline
-    return NextResponse.json({ pipeline: { ...updated, steps: JSON.parse(updated.steps) } })
+    return NextResponse.json({ pipeline: { ...updated, steps: safeJsonParse(updated.steps, []) } })
   } catch (error) {
     logger.error({ err: error }, 'PUT /api/pipelines error')
     return NextResponse.json({ error: 'Failed to update pipeline' }, { status: 500 })

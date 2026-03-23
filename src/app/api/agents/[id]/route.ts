@@ -5,6 +5,7 @@ import { writeAgentToConfig, enrichAgentConfigFromWorkspace, removeAgentFromConf
 import { eventBus } from '@/lib/event-bus'
 import { logger } from '@/lib/logger'
 import { runOpenClaw } from '@/lib/command'
+import { safeJsonParse } from '@/lib/safe-utils'
 
 /**
  * GET /api/agents/[id] - Get a single agent by ID or name
@@ -34,7 +35,7 @@ export async function GET(
 
     const parsed = {
       ...(agent as any),
-      config: enrichAgentConfigFromWorkspace((agent as any).config ? JSON.parse((agent as any).config) : {}),
+      config: enrichAgentConfigFromWorkspace(safeJsonParse((agent as any).config ?? '', {})),
     }
 
     return NextResponse.json({ agent: parsed })
@@ -79,7 +80,7 @@ export async function PUT(
     }
 
     const now = Math.floor(Date.now() / 1000)
-    const existingConfig = agent.config ? JSON.parse(agent.config) : {}
+    const existingConfig = safeJsonParse<Record<string, any>>(agent.config ?? '', {})
 
     // Merge gateway_config into existing config
     let newConfig = existingConfig
@@ -227,7 +228,7 @@ export async function DELETE(
     }
 
     if (removeWorkspace) {
-      const agentConfig = agent.config ? JSON.parse(agent.config) : {}
+      const agentConfig = safeJsonParse<Record<string, any>>(agent.config ?? '', {})
       const openclawId =
         String(agentConfig?.openclawId || agent.name || '')
           .toLowerCase()
@@ -246,7 +247,7 @@ export async function DELETE(
 
     let configCleanupWarning: string | null = null
     try {
-      const agentConfig = agent.config ? JSON.parse(agent.config) : {}
+      const agentConfig = safeJsonParse<Record<string, any>>(agent.config ?? '', {})
       const openclawId =
         String(agentConfig?.openclawId || agent.name || '')
           .toLowerCase()

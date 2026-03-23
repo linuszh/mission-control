@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase, db_helpers } from '@/lib/db';
 import { requireRole } from '@/lib/auth';
 import { logger } from '@/lib/logger';
+import { safeJsonParse } from '@/lib/safe-utils';
 import { config } from '@/lib/config';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
@@ -58,7 +59,7 @@ export async function GET(
     let workingMemory = '';
     let source: 'workspace' | 'database' | 'none' = 'none';
     try {
-      const agentConfig = agent.config ? JSON.parse(agent.config) : {};
+      const agentConfig = safeJsonParse(agent.config, {});
       const candidates = getAgentWorkspaceCandidates(agentConfig, agent.name);
       const match = readAgentWorkspaceFile(candidates, ['WORKING.md', 'working.md', 'MEMORY.md', 'memory.md']);
       if (match.exists) {
@@ -151,7 +152,7 @@ export async function PUT(
     // Best effort: sync workspace WORKING.md if agent workspace is configured
     let savedToWorkspace = false;
     try {
-      const agentConfig = agent.config ? JSON.parse(agent.config) : {};
+      const agentConfig = safeJsonParse(agent.config, {});
       const candidates = getAgentWorkspaceCandidates(agentConfig, agent.name);
       const safeWorkspace = candidates[0];
       if (safeWorkspace) {
@@ -235,7 +236,7 @@ export async function DELETE(
 
     // Best effort: clear workspace WORKING.md if agent workspace is configured
     try {
-      const agentConfig = agent.config ? JSON.parse(agent.config) : {};
+      const agentConfig = safeJsonParse(agent.config, {});
       const candidates = getAgentWorkspaceCandidates(agentConfig, agent.name);
       const safeWorkspace = candidates[0];
       if (safeWorkspace) {

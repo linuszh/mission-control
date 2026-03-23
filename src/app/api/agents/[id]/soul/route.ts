@@ -7,6 +7,7 @@ import { resolveWithin } from '@/lib/paths';
 import { getAgentWorkspaceCandidates, readAgentWorkspaceFile } from '@/lib/agent-workspace';
 import { requireRole } from '@/lib/auth';
 import { logger } from '@/lib/logger';
+import { safeJsonParse } from '@/lib/safe-utils';
 
 function resolveAgentWorkspacePath(workspace: string): string {
   if (isAbsolute(workspace)) return resolve(workspace)
@@ -47,7 +48,7 @@ export async function GET(
     let source: 'workspace' | 'database' | 'none' = 'none'
 
     try {
-      const agentConfig = agent.config ? JSON.parse(agent.config) : {}
+      const agentConfig = safeJsonParse(agent.config, {})
       const candidates = getAgentWorkspaceCandidates(agentConfig, agent.name)
       const match = readAgentWorkspaceFile(candidates, ['soul.md', 'SOUL.md'])
       if (match.exists) {
@@ -161,7 +162,7 @@ export async function PUT(
     // Write to workspace file if available
     let savedToWorkspace = false
     try {
-      const agentConfig = agent.config ? JSON.parse(agent.config) : {}
+      const agentConfig = safeJsonParse(agent.config, {})
       const candidates = getAgentWorkspaceCandidates(agentConfig, agent.name)
       const safeWorkspace = candidates[0]
       if (safeWorkspace) {

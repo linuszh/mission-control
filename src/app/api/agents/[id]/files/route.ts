@@ -7,6 +7,7 @@ import { dirname, isAbsolute, resolve } from 'node:path'
 import { resolveWithin } from '@/lib/paths'
 import { getAgentWorkspaceCandidates, readAgentWorkspaceFile } from '@/lib/agent-workspace'
 import { logger } from '@/lib/logger'
+import { safeJsonParse } from '@/lib/safe-utils'
 
 const ALLOWED_FILES = new Set([
   'agent.md',
@@ -58,7 +59,7 @@ export async function GET(
     const agent = getAgentByIdOrName(db, id, workspaceId)
     if (!agent) return NextResponse.json({ error: 'Agent not found' }, { status: 404 })
 
-    const agentConfig = agent.config ? JSON.parse(agent.config) : {}
+    const agentConfig = safeJsonParse(agent.config, {})
     const candidates = getAgentWorkspaceCandidates(agentConfig, agent.name)
     if (candidates.length === 0) {
       return NextResponse.json({ error: 'Agent workspace is not configured' }, { status: 400 })
@@ -115,7 +116,7 @@ export async function PUT(
     const agent = getAgentByIdOrName(db, id, workspaceId)
     if (!agent) return NextResponse.json({ error: 'Agent not found' }, { status: 404 })
 
-    const agentConfig = agent.config ? JSON.parse(agent.config) : {}
+    const agentConfig = safeJsonParse(agent.config, {})
     const candidates = getAgentWorkspaceCandidates(agentConfig, agent.name)
     const safeWorkspace = candidates[0]
     if (!safeWorkspace) {

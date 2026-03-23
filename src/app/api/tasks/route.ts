@@ -10,6 +10,7 @@ import { normalizeTaskCreateStatus } from '@/lib/task-status';
 import { pushTaskToGitHub } from '@/lib/github-sync-engine';
 import { pushTaskToGnap } from '@/lib/gnap-sync';
 import { config } from '@/lib/config';
+import { safeJsonParse } from '@/lib/safe-utils';
 
 function formatTicketRef(prefix?: string | null, num?: number | null): string | undefined {
   if (!prefix || typeof num !== 'number' || !Number.isFinite(num) || num <= 0) return undefined
@@ -19,8 +20,8 @@ function formatTicketRef(prefix?: string | null, num?: number | null): string | 
 function mapTaskRow(task: any): Task & { tags: string[]; metadata: Record<string, unknown> } {
   return {
     ...task,
-    tags: task.tags ? JSON.parse(task.tags) : [],
-    metadata: task.metadata ? JSON.parse(task.metadata) : {},
+    tags: safeJsonParse(task.tags, []),
+    metadata: safeJsonParse(task.metadata, {}),
     ticket_ref: formatTicketRef(task.project_prefix, task.project_ticket_no),
   }
 }
@@ -137,9 +138,9 @@ export async function GET(request: NextRequest) {
       countQuery += ' AND project_id = ?';
       countParams.push(projectIdParam);
     }
-    const countRow = db.prepare(countQuery).get(...countParams) as { total: number };
+    const countRow = db.prepare(countQuery).get(...countParams) as { total: number } | undefined;
 
-    return NextResponse.json({ tasks: tasksWithParsedData, total: countRow.total, page: Math.floor(offset / limit) + 1, limit });
+    return NextResponse.json({ tasks: tasksWithParsedData, total: countRow?.total ?? 0, page: Math.floor(offset / limit) + 1, limit });
   } catch (error) {
     logger.error({ err: error }, 'GET /api/tasks error');
     return NextResponse.json({ error: 'Failed to fetch tasks' }, { status: 500 });

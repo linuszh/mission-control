@@ -5,6 +5,7 @@ import { randomBytes } from 'crypto'
 import { mutationLimiter } from '@/lib/rate-limit'
 import { logger } from '@/lib/logger'
 import { validateBody, createWebhookSchema } from '@/lib/validation'
+import { safeJsonParse } from '@/lib/safe-utils'
 
 const WEBHOOK_BLOCKED_HOSTNAMES = new Set([
   'localhost', '127.0.0.1', '::1', '0.0.0.0',
@@ -56,7 +57,7 @@ export async function GET(request: NextRequest) {
     const maxRetries = parseInt(process.env.MC_WEBHOOK_MAX_RETRIES || '5', 10) || 5
     const result = webhooks.map((wh) => ({
       ...wh,
-      events: JSON.parse(wh.events || '["*"]'),
+      events: safeJsonParse(wh.events, ['*']),
       secret: wh.secret ? '••••••' + wh.secret.slice(-4) : null,
       enabled: !!wh.enabled,
       consecutive_failures: wh.consecutive_failures ?? 0,
