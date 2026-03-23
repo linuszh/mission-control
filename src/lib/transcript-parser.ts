@@ -1,5 +1,6 @@
-import { readFileSync, existsSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import path from 'node:path'
+import { readFileSafe } from '@/lib/safe-utils'
 
 export type MessageContentPart =
   | { type: 'text'; text: string }
@@ -129,9 +130,5 @@ export function parseGatewayHistoryTranscript(messages: unknown[], limit: number
 export function readSessionJsonl(stateDir: string, agentName: string, sessionId: string): string | null {
   const jsonlPath = path.join(stateDir, 'agents', agentName, 'sessions', `${sessionId}.jsonl`)
   if (!existsSync(jsonlPath)) return null
-  try {
-    return readFileSync(jsonlPath, 'utf-8')
-  } catch {
-    return null
-  }
+  return readFileSafe(jsonlPath, { maxBytes: 10 * 1024 * 1024 })
 }
