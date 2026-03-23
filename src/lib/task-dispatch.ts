@@ -1,9 +1,10 @@
 import { getDatabase, db_helpers } from './db'
-import { runOpenClaw } from './command'
+import { runOpenClaw, runCommand } from './command'
 import { callOpenClawGateway } from './openclaw-gateway'
 import { eventBus } from './event-bus'
 import { logger } from './logger'
 import { config } from './config'
+import { recordSpawnStart, recordSpawnFinish } from './spawn-history'
 
 interface DispatchableTask {
   id: number
@@ -365,8 +366,8 @@ function buildReviewPrompt(task: ReviewableTask): string {
 function parseReviewVerdict(text: string): { status: 'approved' | 'rejected'; notes: string } {
   const upper = text.toUpperCase()
   const status = upper.includes('VERDICT: APPROVED') ? 'approved' as const : 'rejected' as const
-  const notesMatch = text.match(/NOTES:\s*(.+)/i)
-  const notes = notesMatch?.[1]?.trim().substring(0, 2000) || (status === 'approved' ? 'Quality check passed' : 'Quality check failed')
+  const notesMatch = text.match(/NOTES:\s*([\s\S]+)/i)
+  const notes = notesMatch?.[1]?.trim().substring(0, 4000) || (status === 'approved' ? 'Quality check passed' : 'Quality check failed')
   return { status, notes }
 }
 
@@ -405,41 +406,32 @@ export async function runAegisReviews(): Promise<{ ok: boolean; message: string 
       previous_status: 'review',
     })
 
+    // Record Aegis spawn for runs dashboard
+    const aegisSpawnId = recordSpawnStart({
+      agentName: 'aegis',
+      spawnType: 'claude-code',
+      trigger: 'agent',
+      workspaceId: task.workspace_id,
+    })
+    const aegisStartTime = Date.now()
+
     try {
       const prompt = buildReviewPrompt(task)
-      let agentResponse: AgentResponseParsed
 
-      if (!isGatewayAvailable() && getAnthropicApiKey()) {
-        // Direct Claude API review — no gateway needed
-        const reviewTask: DispatchableTask = {
-          id: task.id, title: task.title, description: task.description,
-          status: 'quality_review', priority: 'high', assigned_to: 'aegis',
-          workspace_id: task.workspace_id, agent_name: 'aegis', agent_id: 0,
-          agent_config: null, ticket_prefix: task.ticket_prefix,
-          project_ticket_no: task.project_ticket_no, project_id: null,
-        }
-        agentResponse = await callClaudeDirectly(reviewTask, prompt)
-      } else {
-        // Resolve the gateway agent ID from config, falling back to assigned_to or default
-        const reviewAgent = resolveGatewayAgentIdForReview(task)
+      // Use Claude Code CLI with a cheap model for quality reviews
+      const aegisResult = await runCommand(config.claudeBin, [
+        '-p', prompt,
+        '--output-format', 'json',
+        '--dangerously-skip-permissions',
+        '--model', 'haiku',
+      ], {
+        timeoutMs: 120_000,
+        env: { ...process.env, HOME: config.claudeHome, CLAUDE_CONFIG_DIR: config.claudeHome },
+        input: '',
+      })
 
-        const invokeParams = {
-          message: prompt,
-          agentId: reviewAgent,
-          idempotencyKey: `aegis-review-${task.id}-${Date.now()}`,
-          deliver: false,
-        }
-        const finalResult = await runOpenClaw(
-          ['gateway', 'call', 'agent', '--expect-final', '--timeout', '120000', '--params', JSON.stringify(invokeParams), '--json'],
-          { timeoutMs: 125_000 }
-        )
-        const finalPayload = parseGatewayJson(finalResult.stdout)
-          ?? parseGatewayJson(String((finalResult as any)?.stderr || ''))
-        agentResponse = parseAgentResponse(
-          finalPayload?.result ? JSON.stringify(finalPayload.result) : finalResult.stdout
-        )
-      }
-
+      recordSpawnFinish(aegisSpawnId, { status: 'completed', durationMs: Date.now() - aegisStartTime })
+      const agentResponse = parseAgentResponse(aegisResult.stdout)
       if (!agentResponse.text) {
         throw new Error('Aegis review returned empty response')
       }
@@ -516,6 +508,7 @@ export async function runAegisReviews(): Promise<{ ok: boolean; message: string 
     } catch (err: any) {
       const errorMsg = err.message || 'Unknown error'
       logger.error({ taskId: task.id, err }, 'Aegis review failed')
+      try { recordSpawnFinish(aegisSpawnId, { status: 'failed', error: errorMsg, durationMs: Date.now() - aegisStartTime }) } catch { /* non-fatal */ }
 
       // Revert to review so it can be retried
       db.prepare('UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?')
@@ -621,6 +614,114 @@ export async function requeueStaleTasks(): Promise<{ ok: boolean; message: strin
   }
 }
 
+// ---------------------------------------------------------------------------
+// Claude Code CLI dispatch
+// ---------------------------------------------------------------------------
+
+/** Resolve the dispatch mode from agent config. Defaults to 'auto'. */
+function resolveDispatchMode(task: DispatchableTask): 'cli' | 'gateway' | 'auto' {
+  if (!task.agent_config) return 'auto'
+  try {
+    const cfg = JSON.parse(task.agent_config)
+    if (cfg.dispatchMode === 'cli' || cfg.dispatchMode === 'gateway') return cfg.dispatchMode
+  } catch { /* ignore */ }
+  return 'auto'
+}
+
+/** Resolve the Claude Code agent name from agent config. Returns null if not a CC agent. */
+function resolveClaudeAgent(task: DispatchableTask): string | null {
+  if (!task.agent_config) return null
+  try {
+    const cfg = JSON.parse(task.agent_config)
+    if (typeof cfg.agentFile === 'string' && cfg.agentFile) {
+      // agentFile is e.g. "dev.md" → agent name is "dev"
+      return cfg.agentFile.replace(/\.md$/, '')
+    }
+  } catch { /* ignore */ }
+  return null
+}
+
+/** Dispatch a task to a Claude Code CLI agent with spawn tracking. */
+async function runClaudeCodeTask(
+  task: DispatchableTask,
+  prompt: string,
+  agentName: string,
+): Promise<AgentResponseParsed> {
+  const db = getDatabase()
+  const now = Math.floor(Date.now() / 1000)
+
+  // Record spawn start → auto-creates AgentRun entry
+  const spawnId = recordSpawnStart({
+    agentName: task.agent_name,
+    agentId: task.agent_id,
+    spawnType: 'claude-code',
+    trigger: 'agent',
+    workspaceId: task.workspace_id,
+  })
+
+  // Mark agent as busy
+  db.prepare('UPDATE agents SET status = ?, last_seen = ?, last_activity = ?, updated_at = ? WHERE id = ?')
+    .run('busy', now, `Running task: ${task.title}`, now, task.agent_id)
+  eventBus.broadcast('agent.status_changed', {
+    id: task.agent_id,
+    name: task.agent_name,
+    status: 'busy',
+    last_seen: now,
+  })
+
+  const startTime = Date.now()
+
+  // Don't pass model override — Claude Code agents have their own model config.
+  const args = [
+    '-p', prompt,
+    '--output-format', 'json',
+    '--dangerously-skip-permissions',
+    '--agent', agentName,
+  ]
+
+  logger.info({ taskId: task.id, agent: task.agent_name, claudeAgent: agentName }, 'Dispatching task via Claude Code CLI')
+
+  try {
+    const result = await runCommand(config.claudeBin, args, {
+      timeoutMs: 1_800_000, // 30 minutes
+      env: { ...process.env, HOME: config.claudeHome, CLAUDE_CONFIG_DIR: config.claudeHome },
+      input: '', // prevent stdin warning
+    })
+
+    const durationMs = Date.now() - startTime
+    recordSpawnFinish(spawnId, { status: 'completed', durationMs })
+
+    // Mark agent as idle
+    const afterNow = Math.floor(Date.now() / 1000)
+    db.prepare('UPDATE agents SET status = ?, last_seen = ?, last_activity = ?, updated_at = ? WHERE id = ?')
+      .run('idle', afterNow, `Completed task: ${task.title}`, afterNow, task.agent_id)
+    eventBus.broadcast('agent.status_changed', {
+      id: task.agent_id,
+      name: task.agent_name,
+      status: 'idle',
+      last_seen: afterNow,
+    })
+
+    return parseAgentResponse(result.stdout)
+  } catch (err: any) {
+    const durationMs = Date.now() - startTime
+    recordSpawnFinish(spawnId, { status: 'failed', error: err.message, durationMs })
+
+    // Mark agent as idle even on failure
+    const afterNow = Math.floor(Date.now() / 1000)
+    db.prepare('UPDATE agents SET status = ?, last_seen = ?, updated_at = ? WHERE id = ?')
+      .run('idle', afterNow, afterNow, task.agent_id)
+    eventBus.broadcast('agent.status_changed', {
+      id: task.agent_id,
+      name: task.agent_name,
+      status: 'idle',
+      last_seen: afterNow,
+    })
+
+    throw err
+  }
+}
+
 export async function dispatchAssignedTasks(): Promise<{ ok: boolean; message: string }> {
   const db = getDatabase()
 
@@ -649,10 +750,36 @@ export async function dispatchAssignedTasks(): Promise<{ ok: boolean; message: s
     }
   }
 
+  // Filter out tasks whose dependencies aren't done yet
+  const readyTasks = tasks.filter(task => {
+    try {
+      const metaRow = db.prepare('SELECT metadata FROM tasks WHERE id = ?').get(task.id) as { metadata: string } | undefined
+      const meta = metaRow?.metadata ? JSON.parse(metaRow.metadata) : {}
+      const rawDeps: number[] = Array.isArray(meta.depends_on) ? meta.depends_on : []
+      const deps = rawDeps.filter(d => d !== task.id) // ignore self-references
+      if (deps.length === 0) return true
+
+      const placeholders = deps.map(() => '?').join(',')
+      const doneCount = (db.prepare(
+        `SELECT COUNT(*) as c FROM tasks WHERE id IN (${placeholders}) AND status = 'done'`
+      ).get(...deps) as { c: number }).c
+
+      if (doneCount < deps.length) {
+        logger.info({ taskId: task.id, deps, doneCount, total: deps.length }, 'Task blocked by unfinished dependencies, skipping')
+        return false
+      }
+      return true
+    } catch { return true }
+  })
+
+  if (readyTasks.length === 0 && tasks.length > 0) {
+    return { ok: true, message: `${tasks.length} assigned task(s) blocked by dependencies` }
+  }
+
   const results: Array<{ id: number; success: boolean; error?: string }> = []
   const now = Math.floor(Date.now() / 1000)
 
-  for (const task of tasks) {
+  for (const task of readyTasks) {
     // Mark as in_progress immediately to prevent re-dispatch
     db.prepare('UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?')
       .run('in_progress', now, task.id)
@@ -696,11 +823,13 @@ export async function dispatchAssignedTasks(): Promise<{ ok: boolean; message: s
         : null
 
       let agentResponse: AgentResponseParsed
-      const useDirectApi = !isGatewayAvailable() && getAnthropicApiKey()
+      const dispatchMode = resolveDispatchMode(task)
+      const claudeAgent = resolveClaudeAgent(task)
+      const useCli = dispatchMode === 'cli' || (dispatchMode === 'auto' && claudeAgent)
 
-      if (useDirectApi && !targetSession) {
-        // Direct Claude API dispatch — no gateway needed
-        agentResponse = await callClaudeDirectly(task, prompt)
+      if (useCli && claudeAgent && !targetSession) {
+        // Dispatch via Claude Code CLI agent
+        agentResponse = await runClaudeCodeTask(task, prompt, claudeAgent)
       } else if (targetSession) {
         // Dispatch to a specific existing session via chat.send
         logger.info({ taskId: task.id, targetSession, agent: task.agent_name }, 'Dispatching task to targeted session')
@@ -724,7 +853,7 @@ export async function dispatchAssignedTasks(): Promise<{ ok: boolean; message: s
           sessionId: sendResult?.runId || targetSession,
         }
       } else {
-        // Step 1: Invoke via gateway (new session)
+        // Dispatch via OpenClaw gateway (new session)
         const gatewayAgentId = resolveGatewayAgentId(task)
         const dispatchModel = classifyTaskModel(task)
         const invokeParams: Record<string, unknown> = {
@@ -753,7 +882,7 @@ export async function dispatchAssignedTasks(): Promise<{ ok: boolean; message: s
         if (!agentResponse.sessionId && finalPayload?.result?.meta?.agentMeta?.sessionId) {
           agentResponse.sessionId = finalPayload.result.meta.agentMeta.sessionId
         }
-      } // end else (new session dispatch)
+      }
 
       if (!agentResponse.text) {
         throw new Error('Agent returned empty response')
