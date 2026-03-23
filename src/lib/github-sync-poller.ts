@@ -11,6 +11,7 @@ const INTERVAL_MS = parseInt(process.env.GITHUB_SYNC_INTERVAL_MS || '60000', 10)
 
 let intervalHandle: ReturnType<typeof setInterval> | null = null
 let lastRun: number | undefined
+let shutdownHooksRegistered = false
 
 export function startSyncPoller(): void {
   if (intervalHandle) return
@@ -20,6 +21,13 @@ export function startSyncPoller(): void {
   intervalHandle = setInterval(async () => {
     await runSyncTick()
   }, INTERVAL_MS)
+  intervalHandle.unref()
+
+  if (!shutdownHooksRegistered) {
+    process.on('SIGTERM', stopSyncPoller)
+    process.on('SIGINT', stopSyncPoller)
+    shutdownHooksRegistered = true
+  }
 
   // Run immediately on start
   runSyncTick().catch(() => {})
