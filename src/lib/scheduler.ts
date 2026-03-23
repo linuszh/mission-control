@@ -1,8 +1,8 @@
 import { getDatabase, logAuditEvent } from './db'
 import { syncAgentsFromConfig } from './agent-sync'
-import { config, ensureDirExists } from './config'
+import { config } from './config'
 import { join, dirname } from 'path'
-import { readdirSync, statSync, unlinkSync } from 'fs'
+import { mkdir, readdir, stat, unlink } from 'fs/promises'
 import { logger } from './logger'
 import { processWebhookRetries } from './webhooks'
 import { syncClaudeSessions } from './claude-sessions'
@@ -53,7 +53,7 @@ function getSettingNumber(key: string, defaultValue: number): number {
 
 /** Run a database backup */
 async function runBackup(): Promise<{ ok: boolean; message: string }> {
-  ensureDirExists(BACKUP_DIR)
+  await mkdir(BACKUP_DIR, { recursive: true })
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19)
   const backupPath = join(BACKUP_DIR, `mc-backup-${timestamp}.db`)
@@ -62,29 +62,32 @@ async function runBackup(): Promise<{ ok: boolean; message: string }> {
     const db = getDatabase()
     await db.backup(backupPath)
 
-    const stat = statSync(backupPath)
+    const backupStat = await stat(backupPath)
     logAuditEvent({
       action: 'auto_backup',
       actor: 'scheduler',
-      detail: { path: backupPath, size: stat.size },
+      detail: { path: backupPath, size: backupStat.size },
     })
 
     // Prune old backups
     const maxBackups = getSettingNumber('general.backup_retention_count', 10)
     try {
-      const files = readdirSync(BACKUP_DIR)
-        .filter(f => f.startsWith('mc-backup-') && f.endsWith('.db'))
-        .map(f => ({ name: f, mtime: statSync(join(BACKUP_DIR, f)).mtimeMs }))
-        .sort((a, b) => b.mtime - a.mtime)
+      const entries = await readdir(BACKUP_DIR)
+      const files = await Promise.all(
+        entries
+          .filter(f => f.startsWith('mc-backup-') && f.endsWith('.db'))
+          .map(async f => ({ name: f, mtime: (await stat(join(BACKUP_DIR, f))).mtimeMs }))
+      )
+      files.sort((a, b) => b.mtime - a.mtime)
 
       for (const file of files.slice(maxBackups)) {
-        unlinkSync(join(BACKUP_DIR, file.name))
+        await unlink(join(BACKUP_DIR, file.name))
       }
     } catch {
       // Best-effort pruning
     }
 
-    const sizeKB = Math.round(stat.size / 1024)
+    const sizeKB = Math.round(backupStat.size / 1024)
     return { ok: true, message: `Backup created (${sizeKB}KB)` }
   } catch (err: any) {
     return { ok: false, message: `Backup failed: ${err.message}` }
