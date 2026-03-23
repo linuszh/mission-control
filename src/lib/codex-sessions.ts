@@ -1,7 +1,8 @@
-import { readdirSync, readFileSync, statSync } from 'fs'
+import { readdirSync, statSync } from 'fs'
 import { basename, join } from 'path'
 import { config } from './config'
 import { logger } from './logger'
+import { readFileSafe } from '@/lib/safe-utils'
 
 const ACTIVE_THRESHOLD_MS = 90 * 60 * 1000
 const DEFAULT_FILE_SCAN_LIMIT = 120
@@ -49,11 +50,12 @@ function deriveSessionId(filePath: string): string {
 function listRecentCodexSessionFiles(limit: number): ParsedFile[] {
   const root = join(config.homeDir, '.codex', 'sessions')
   const files: ParsedFile[] = []
-  const stack = [root]
+  const stack: { path: string; depth: number }[] = [{ path: root, depth: 0 }]
 
   while (stack.length > 0) {
-    const dir = stack.pop()
-    if (!dir) continue
+    const item = stack.pop()
+    if (!item) continue
+    const { path: dir, depth } = item
 
     let entries: string[]
     try {
@@ -72,7 +74,7 @@ function listRecentCodexSessionFiles(limit: number): ParsedFile[] {
       }
 
       if (stat.isDirectory()) {
-        stack.push(fullPath)
+        if (depth < 3) stack.push({ path: fullPath, depth: depth + 1 })
         continue
       }
 
@@ -94,12 +96,8 @@ function clampTimestamp(ms: number): number {
 }
 
 function parseCodexSessionFile(filePath: string, fileMtimeMs: number): CodexSessionStats | null {
-  let content: string
-  try {
-    content = readFileSync(filePath, 'utf-8')
-  } catch {
-    return null
-  }
+  const content = readFileSafe(filePath, { maxBytes: 10 * 1024 * 1024 })
+  if (content === null) return null
 
   const lines = content.split('\n').filter(Boolean)
   if (lines.length === 0) return null
