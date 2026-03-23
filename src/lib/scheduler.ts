@@ -123,7 +123,7 @@ async function runCleanup(): Promise<{ ok: boolean; message: string }> {
     // Clean token usage file
     if (ret.tokenUsage > 0) {
       try {
-        const { readFile, writeFile } = require('fs/promises')
+        const { readFile, writeFile, rename } = require('fs/promises')
         const raw = await readFile(config.tokensPath, 'utf-8')
         const data = JSON.parse(raw)
         const cutoffMs = Date.now() - ret.tokenUsage * 86400000
@@ -131,7 +131,9 @@ async function runCleanup(): Promise<{ ok: boolean; message: string }> {
         const removed = data.length - kept.length
 
         if (removed > 0) {
-          await writeFile(config.tokensPath, JSON.stringify(kept, null, 2))
+          const tmpPath = config.tokensPath + '.tmp'
+          await writeFile(tmpPath, JSON.stringify(kept, null, 2))
+          await rename(tmpPath, config.tokensPath)
           totalDeleted += removed
         }
       } catch {
