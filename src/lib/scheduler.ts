@@ -414,6 +414,13 @@ function getNextDailyMs(hour: number): number {
   return next.getTime() - now.getTime()
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`Task timed out after ${ms}ms`)), ms))
+  ])
+}
+
 /** Check and run due tasks */
 async function tick() {
   const now = Date.now()
@@ -439,25 +446,30 @@ async function tick() {
 
     task.running = true
     try {
-      const result = id === 'auto_backup' ? await runBackup()
-        : id === 'agent_heartbeat' ? await runHeartbeatCheck()
-        : id === 'webhook_retry' ? await processWebhookRetries()
-        : id === 'claude_session_scan' ? await syncClaudeSessions()
-        : id === 'skill_sync' ? await syncSkillsFromDisk()
-        : id === 'local_agent_sync' ? await syncLocalAgents()
-        : id === 'gateway_agent_sync' ? await syncAgentsFromConfig('scheduled').then(async r => {
-            const refreshed = await syncAgentLiveStatuses()
-            return { ok: true, message: `Gateway sync: ${r.created} created, ${r.updated} updated, ${r.synced} total | Live status: ${refreshed} refreshed` }
-          })
-        : id === 'task_dispatch' ? await autoRouteInboxTasks().then(async (routeResult) => {
-            const dispatchResult = await dispatchAssignedTasks()
-            const parts = [routeResult.message, dispatchResult.message].filter(m => m && !m.includes('No '))
-            return { ok: routeResult.ok && dispatchResult.ok, message: parts.join(' | ') || 'No tasks to route or dispatch' }
-          })
-        : id === 'aegis_review' ? await runAegisReviews()
-        : id === 'recurring_task_spawn' ? await spawnRecurringTasks()
-        : id === 'stale_task_requeue' ? await requeueStaleTasks()
-        : await runCleanup()
+      const result = await withTimeout(
+        (async () => {
+          return id === 'auto_backup' ? await runBackup()
+            : id === 'agent_heartbeat' ? await runHeartbeatCheck()
+            : id === 'webhook_retry' ? await processWebhookRetries()
+            : id === 'claude_session_scan' ? await syncClaudeSessions()
+            : id === 'skill_sync' ? await syncSkillsFromDisk()
+            : id === 'local_agent_sync' ? await syncLocalAgents()
+            : id === 'gateway_agent_sync' ? await syncAgentsFromConfig('scheduled').then(async r => {
+                const refreshed = await syncAgentLiveStatuses()
+                return { ok: true, message: `Gateway sync: ${r.created} created, ${r.updated} updated, ${r.synced} total | Live status: ${refreshed} refreshed` }
+              })
+            : id === 'task_dispatch' ? await autoRouteInboxTasks().then(async (routeResult) => {
+                const dispatchResult = await dispatchAssignedTasks()
+                const parts = [routeResult.message, dispatchResult.message].filter(m => m && !m.includes('No '))
+                return { ok: routeResult.ok && dispatchResult.ok, message: parts.join(' | ') || 'No tasks to route or dispatch' }
+              })
+            : id === 'aegis_review' ? await runAegisReviews()
+            : id === 'recurring_task_spawn' ? await spawnRecurringTasks()
+            : id === 'stale_task_requeue' ? await requeueStaleTasks()
+            : await runCleanup()
+        })(),
+        300_000
+      )
       task.lastResult = { ...result, timestamp: now }
     } catch (err: any) {
       task.lastResult = { ok: false, message: err.message, timestamp: now }
