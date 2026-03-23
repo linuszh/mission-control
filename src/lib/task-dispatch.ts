@@ -542,18 +542,20 @@ export async function requeueStaleTasks(): Promise<{ ok: boolean; message: strin
   const db = getDatabase()
   const now = Math.floor(Date.now() / 1000)
   const staleThreshold = now - 10 * 60 // 10 minutes
+  const longRunningThreshold = now - 30 * 60 // 30 minutes — requeue regardless of agent status
   const maxDispatchRetries = 5
 
   const staleTasks = db.prepare(`
     SELECT t.id, t.title, t.assigned_to, t.dispatch_attempts, t.workspace_id,
+           t.updated_at as task_updated_at,
            a.status as agent_status, a.last_seen as agent_last_seen
     FROM tasks t
     LEFT JOIN agents a ON a.name = t.assigned_to AND a.workspace_id = t.workspace_id
     WHERE t.status = 'in_progress'
-      AND t.updated_at < ?
-  `).all(staleThreshold) as Array<{
+      AND (t.updated_at < ? OR t.updated_at < ?)
+  `).all(staleThreshold, longRunningThreshold) as Array<{
     id: number; title: string; assigned_to: string | null; dispatch_attempts: number
-    workspace_id: number; agent_status: string | null; agent_last_seen: number | null
+    workspace_id: number; task_updated_at: number; agent_status: string | null; agent_last_seen: number | null
   }>
 
   if (staleTasks.length === 0) {
@@ -564,15 +566,22 @@ export async function requeueStaleTasks(): Promise<{ ok: boolean; message: strin
   let failed = 0
 
   for (const task of staleTasks) {
-    // Only requeue if the agent is offline or unknown
     const agentOffline = !task.agent_status || task.agent_status === 'offline'
-    if (!agentOffline) continue
+    const longRunning = task.task_updated_at < longRunningThreshold
+
+    // Requeue if the agent is offline/unknown, or if the task has been in_progress
+    // for more than 30 minutes (covers MC process crash where agent may still appear active)
+    if (!agentOffline && !longRunning) continue
 
     const newAttempts = (task.dispatch_attempts ?? 0) + 1
 
     if (newAttempts >= maxDispatchRetries) {
+      const reason = longRunning && !agentOffline
+        ? `Task stuck in_progress for over 30 minutes (${newAttempts} attempts) — agent "${task.assigned_to}" may have been orphaned by an MC restart. Moved to failed.`
+        : `Task stuck in_progress ${newAttempts} times — agent "${task.assigned_to}" offline. Moved to failed.`
+
       db.prepare('UPDATE tasks SET status = ?, error_message = ?, dispatch_attempts = ?, updated_at = ? WHERE id = ?')
-        .run('failed', `Task stuck in_progress ${newAttempts} times — agent "${task.assigned_to}" offline. Moved to failed.`, newAttempts, now, task.id)
+        .run('failed', reason, newAttempts, now, task.id)
 
       eventBus.broadcast('task.status_changed', {
         id: task.id,
@@ -584,20 +593,26 @@ export async function requeueStaleTasks(): Promise<{ ok: boolean; message: strin
 
       failed++
     } else {
+      const comment = longRunning && !agentOffline
+        ? `Task requeued (attempt ${newAttempts}/${maxDispatchRetries}): task was in_progress for over 30 minutes — possible MC restart orphaned the task while agent "${task.assigned_to}" was still active.`
+        : `Task requeued (attempt ${newAttempts}/${maxDispatchRetries}): agent "${task.assigned_to}" went offline while task was in_progress.`
+
       db.prepare('UPDATE tasks SET status = ?, error_message = ?, dispatch_attempts = ?, updated_at = ? WHERE id = ?')
-        .run('assigned', `Requeued: agent "${task.assigned_to}" went offline while task was in_progress`, newAttempts, now, task.id)
+        .run('assigned', comment, newAttempts, now, task.id)
 
       // Add a comment explaining the requeue
       db.prepare(`
         INSERT INTO comments (task_id, author, content, created_at, workspace_id)
         VALUES (?, 'scheduler', ?, ?, ?)
-      `).run(task.id, `Task requeued (attempt ${newAttempts}/${maxDispatchRetries}): agent "${task.assigned_to}" went offline while task was in_progress.`, now, task.workspace_id)
+      `).run(task.id, comment, now, task.workspace_id)
 
       eventBus.broadcast('task.status_changed', {
         id: task.id,
         status: 'assigned',
         previous_status: 'in_progress',
-        error_message: `Agent "${task.assigned_to}" went offline`,
+        error_message: longRunning && !agentOffline
+          ? `Task orphaned after MC restart (in_progress > 30 min)`
+          : `Agent "${task.assigned_to}" went offline`,
         reason: 'stale_task_requeue',
       })
 
