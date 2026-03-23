@@ -9,11 +9,12 @@
  */
 
 import { createHash } from 'node:crypto'
-import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs'
+import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { getDatabase } from './db'
 import { logger } from './logger'
+import { readFileAsync } from '@/lib/safe-utils'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -56,7 +57,7 @@ function extractDescription(content: string): string | undefined {
   return first.length > 220 ? `${first.slice(0, 217)}...` : first
 }
 
-function getSkillRoots(): Array<{ source: string; path: string }> {
+async function getSkillRoots(): Promise<Array<{ source: string; path: string }>> {
   const home = homedir()
   const cwd = process.cwd()
   const openclawState = process.env.OPENCLAW_STATE_DIR || process.env.OPENCLAW_HOME || join(home, '.openclaw')
@@ -71,11 +72,12 @@ function getSkillRoots(): Array<{ source: string; path: string }> {
 
   // Dynamic: scan for workspace-<agent> directories
   try {
-    const entries = readdirSync(openclawState)
+    const entries = await readdir(openclawState)
     for (const entry of entries) {
       if (!entry.startsWith('workspace-')) continue
       const skillsDir = join(openclawState, entry, 'skills')
-      if (existsSync(skillsDir)) {
+      const skillsDirStat = await stat(skillsDir).catch(() => null)
+      if (skillsDirStat !== null) {
         const agentName = entry.replace('workspace-', '')
         roots.push({ source: `workspace-${agentName}`, path: skillsDir })
       }
@@ -91,37 +93,31 @@ function getSkillRoots(): Array<{ source: string; path: string }> {
 // Disk scanner
 // ---------------------------------------------------------------------------
 
-function scanDiskSkills(): DiskSkill[] {
+async function scanDiskSkills(): Promise<DiskSkill[]> {
   const skills: DiskSkill[] = []
-  for (const root of getSkillRoots()) {
-    if (!existsSync(root.path)) continue
+  for (const root of await getSkillRoots()) {
+    const rootStat = await stat(root.path).catch(() => null)
+    if (rootStat === null) continue
     let entries: string[]
     try {
-      entries = readdirSync(root.path)
+      entries = await readdir(root.path)
     } catch {
       continue
     }
     for (const entry of entries) {
       const skillPath = join(root.path, entry)
-      try {
-        if (!statSync(skillPath).isDirectory()) continue
-      } catch {
-        continue
-      }
+      const skillPathStat = await stat(skillPath).catch(() => null)
+      if (skillPathStat === null || !skillPathStat.isDirectory()) continue
       const skillDoc = join(skillPath, 'SKILL.md')
-      if (!existsSync(skillDoc)) continue
-      try {
-        const content = readFileSync(skillDoc, 'utf8')
-        skills.push({
-          name: entry,
-          source: root.source,
-          path: skillPath,
-          description: extractDescription(content),
-          contentHash: sha256(content),
-        })
-      } catch {
-        // Unreadable — skip
-      }
+      const content = await readFileAsync(skillDoc)
+      if (content === null) continue
+      skills.push({
+        name: entry,
+        source: root.source,
+        path: skillPath,
+        description: extractDescription(content),
+        contentHash: sha256(content),
+      })
     }
   }
   return skills
@@ -134,7 +130,7 @@ function scanDiskSkills(): DiskSkill[] {
 export async function syncSkillsFromDisk(): Promise<{ ok: boolean; message: string }> {
   try {
     const db = getDatabase()
-    const diskSkills = scanDiskSkills()
+    const diskSkills = await scanDiskSkills()
     const now = new Date().toISOString()
 
     // Build a lookup of what's on disk
