@@ -12,11 +12,13 @@
  */
 
 import { createHash } from 'node:crypto'
-import { readdirSync, readFileSync, statSync, existsSync, writeFileSync, mkdirSync } from 'node:fs'
+import { existsSync, writeFileSync, mkdirSync } from 'node:fs'
+import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { getDatabase, logAuditEvent } from './db'
 import { logger } from './logger'
+import { readFileAsync } from '@/lib/safe-utils'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -110,15 +112,18 @@ function getLocalAgentRoots(): string[] {
 // Disk scanner
 // ---------------------------------------------------------------------------
 
-function scanLocalAgents(): DiskAgent[] {
+async function scanLocalAgents(): Promise<DiskAgent[]> {
   const agents: DiskAgent[] = []
   const seen = new Set<string>()
 
   for (const root of getLocalAgentRoots()) {
-    if (!existsSync(root)) continue
+    // Replace existsSync with stat().catch(() => null) pattern
+    const rootStat = await stat(root).catch(() => null)
+    if (!rootStat) continue
+
     let entries: string[]
     try {
-      entries = readdirSync(root)
+      entries = await readdir(root)
     } catch {
       continue
     }
@@ -128,17 +133,17 @@ function scanLocalAgents(): DiskAgent[] {
       if (entry === 'skills') continue
 
       const fullPath = join(root, entry)
-      let stat
+      let entryStat
       try {
-        stat = statSync(fullPath)
+        entryStat = await stat(fullPath)
       } catch {
         continue
       }
 
       // --- Flat .md agent files (Claude Code format) ---
-      if (stat.isFile() && entry.endsWith('.md') && entry !== 'CLAUDE.md' && entry !== 'AGENTS.md') {
-        try {
-          const content = readFileSync(fullPath, 'utf8')
+      if (entryStat.isFile() && entry.endsWith('.md') && entry !== 'CLAUDE.md' && entry !== 'AGENTS.md') {
+        const content = await readFileAsync(fullPath)
+        if (content !== null) {
           const { frontmatter, body } = parseYamlFrontmatter(content)
           const agentName = frontmatter.name || entry.replace(/\.md$/, '')
           if (seen.has(agentName)) continue
@@ -159,15 +164,18 @@ function scanLocalAgents(): DiskAgent[] {
             configContent: configJson,
             contentHash: sha256(content),
           })
-        } catch { /* unreadable */ }
+        }
         continue
       }
 
       // --- Directory-based agents (workspace format) ---
-      if (!stat.isDirectory()) continue
+      if (!entryStat.isDirectory()) continue
 
-      // Check if any marker file exists
-      const hasMarker = ALL_MARKERS.some(f => existsSync(join(fullPath, f)))
+      // Check if any marker file exists using stat().catch(() => null)
+      const markerChecks = await Promise.all(
+        ALL_MARKERS.map(f => stat(join(fullPath, f)).catch(() => null))
+      )
+      const hasMarker = markerChecks.some(s => s !== null)
       if (!hasMarker) continue
 
       if (seen.has(entry)) continue
@@ -178,12 +186,14 @@ function scanLocalAgents(): DiskAgent[] {
       let role = 'agent'
       for (const f of IDENTITY_FILES) {
         const p = join(fullPath, f)
-        if (existsSync(p)) {
-          try {
-            soulContent = readFileSync(p, 'utf8')
+        const fileStat = await stat(p).catch(() => null)
+        if (fileStat !== null) {
+          const text = await readFileAsync(p)
+          if (text !== null) {
+            soulContent = text
             role = extractRole(soulContent)
             break
-          } catch { /* unreadable */ }
+          }
         }
       }
 
@@ -191,11 +201,13 @@ function scanLocalAgents(): DiskAgent[] {
       let configContent: string | null = null
       for (const f of CONFIG_FILES) {
         const p = join(fullPath, f)
-        if (existsSync(p)) {
-          try {
-            configContent = readFileSync(p, 'utf8')
+        const fileStat = await stat(p).catch(() => null)
+        if (fileStat !== null) {
+          const text = await readFileAsync(p)
+          if (text !== null) {
+            configContent = text
             break
-          } catch { /* unreadable */ }
+          }
         }
       }
 
@@ -224,7 +236,7 @@ function scanLocalAgents(): DiskAgent[] {
 export async function syncLocalAgents(): Promise<{ ok: boolean; message: string }> {
   try {
     const db = getDatabase()
-    const diskAgents = scanLocalAgents()
+    const diskAgents = await scanLocalAgents()
     const now = Math.floor(Date.now() / 1000)
 
     const diskMap = new Map<string, DiskAgent>()
