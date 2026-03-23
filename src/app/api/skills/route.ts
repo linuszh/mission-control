@@ -184,7 +184,7 @@ function getSkillsFromDB(): SkillSummary[] | null {
   try {
     const { getDatabase } = require('@/lib/db')
     const db = getDatabase()
-    const rows = db.prepare('SELECT name, source, path, description, registry_slug, security_status FROM skills ORDER BY name').all() as Array<{
+    const rows = db.prepare('SELECT name, source, path, description, registry_slug, security_status FROM skills ORDER BY name LIMIT 1000').all() as Array<{
       name: string; source: string; path: string; description: string | null; registry_slug: string | null; security_status: string | null
     }>
     if (rows.length === 0) return null // DB empty — fall back to fs scan

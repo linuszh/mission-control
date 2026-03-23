@@ -311,7 +311,7 @@ export async function previewSyncDiff(): Promise<SyncDiff> {
   }
 
   const db = getDatabase()
-  const allMCAgents = db.prepare('SELECT name, role, config FROM agents').all() as Array<{ name: string; role: string; config: string }>
+  const allMCAgents = db.prepare('SELECT name, role, config FROM agents LIMIT 1000').all() as Array<{ name: string; role: string; config: string }>
   const mcNames = new Set(allMCAgents.map(a => a.name))
 
   const newAgents: string[] = []

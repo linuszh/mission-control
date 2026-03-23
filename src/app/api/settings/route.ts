@@ -65,7 +65,7 @@ export async function GET(request: NextRequest) {
   if ('error' in auth) return NextResponse.json({ error: auth.error }, { status: auth.status })
 
   const db = getDatabase()
-  const rows = db.prepare('SELECT * FROM settings ORDER BY category, key').all() as SettingRow[]
+  const rows = db.prepare('SELECT * FROM settings ORDER BY category, key LIMIT 1000').all() as SettingRow[]
   const stored = new Map(rows.map(r => [r.key, r]))
 
   // Merge defaults with stored values
