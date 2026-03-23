@@ -1,4 +1,4 @@
-import fs from 'node:fs'
+import { readdir, readFile, rename, stat } from 'node:fs/promises'
 import path from 'node:path'
 
 export interface OpenClawDoctorFixResult {
@@ -36,25 +36,27 @@ function collectReferencedTranscriptNames(store: Record<string, unknown>): Set<s
   return referenced
 }
 
-export function archiveOrphanTranscriptsForStateDir(stateDir: string): OpenClawDoctorFixResult {
+export async function archiveOrphanTranscriptsForStateDir(stateDir: string): Promise<OpenClawDoctorFixResult> {
   const agentsDir = path.join(stateDir, 'agents')
-  if (!fs.existsSync(agentsDir)) {
+  const agentsDirExists = await stat(agentsDir).catch(() => null)
+  if (!agentsDirExists) {
     return { archivedOrphans: 0, storesScanned: 0 }
   }
 
   let archivedOrphans = 0
   let storesScanned = 0
 
-  for (const agentName of fs.readdirSync(agentsDir)) {
+  for (const agentName of await readdir(agentsDir)) {
     const sessionsDir = path.join(agentsDir, agentName, 'sessions')
     const sessionsFile = path.join(sessionsDir, 'sessions.json')
-    if (!fs.existsSync(sessionsFile)) continue
+    const sessionsFileExists = await stat(sessionsFile).catch(() => null)
+    if (!sessionsFileExists) continue
 
     storesScanned += 1
 
     let store: Record<string, unknown>
     try {
-      store = JSON.parse(fs.readFileSync(sessionsFile, 'utf8')) as Record<string, unknown>
+      store = JSON.parse(await readFile(sessionsFile, 'utf8')) as Record<string, unknown>
     } catch {
       continue
     }
@@ -62,13 +64,13 @@ export function archiveOrphanTranscriptsForStateDir(stateDir: string): OpenClawD
     const referenced = collectReferencedTranscriptNames(store)
     const archiveTimestamp = formatArchiveTimestamp()
 
-    for (const entry of fs.readdirSync(sessionsDir, { withFileTypes: true })) {
+    for (const entry of await readdir(sessionsDir, { withFileTypes: true })) {
       if (!entry.isFile() || !isPrimaryTranscriptFile(entry.name)) continue
       if (referenced.has(entry.name)) continue
 
       const sourcePath = path.join(sessionsDir, entry.name)
       const archivePath = `${sourcePath}.deleted.${archiveTimestamp}`
-      fs.renameSync(sourcePath, archivePath)
+      await rename(sourcePath, archivePath)
       archivedOrphans += 1
     }
   }

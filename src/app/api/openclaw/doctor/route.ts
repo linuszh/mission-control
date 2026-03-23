@@ -72,7 +72,7 @@ export async function POST(request: Request) {
       progress.push({ step: 'sessions', detail: detail || 'Session cleanup skipped.' })
     }
 
-    const orphanFix = archiveOrphanTranscriptsForStateDir(config.openclawStateDir)
+    const orphanFix = await archiveOrphanTranscriptsForStateDir(config.openclawStateDir)
     progress.push({
       step: 'orphans',
       detail:

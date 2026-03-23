@@ -19,7 +19,7 @@ afterEach(() => {
 })
 
 describe('archiveOrphanTranscriptsForStateDir', () => {
-  it('archives only unreferenced primary transcript files', () => {
+  it('archives only unreferenced primary transcript files', async () => {
     const stateDir = makeStateDir()
     const sessionsDir = path.join(stateDir, 'agents', 'jarv', 'sessions')
     fs.mkdirSync(sessionsDir, { recursive: true })
@@ -38,7 +38,7 @@ describe('archiveOrphanTranscriptsForStateDir', () => {
     fs.writeFileSync(path.join(sessionsDir, 'orphan-session.jsonl'), '{"type":"session"}\n')
     fs.writeFileSync(path.join(sessionsDir, 'orphan-session.jsonl.reset.2026-03-11T00-00-00.000Z'), 'old\n')
 
-    const result = archiveOrphanTranscriptsForStateDir(stateDir)
+    const result = await archiveOrphanTranscriptsForStateDir(stateDir)
 
     expect(result).toEqual({ archivedOrphans: 1, storesScanned: 1 })
     expect(fs.existsSync(path.join(sessionsDir, 'keep-session.jsonl'))).toBe(true)
